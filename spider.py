@@ -1,26 +1,20 @@
 import requests
 import time
 import json
-from email import encoders
-from email.header import Header
-from email.mime.text import MIMEText
-from email.utils import parseaddr, formataddr
-import smtplib
-import hashlib
-import pymysql
+from marshal import dump, load
 
-database_ip_and_port = '???'
-database_name = '???'
-database_username = '???'
-database_password = '???'
+cache_file = './sendmail.cache'
 
-smtp_server_ip = '???'
-mail_username = '???'
-mail_password = '???'
+keys_file_path = './keys'
+# like  'http://sc.ftqq.com/XXX.send'
+base_url = ''
 
-target_mail_address = '???'
+try:
+    with(open(cache_file, 'rb')) as _fd:
+        sended_list = load(_fd)
+except IOError:
+    sended_list = set()
 
-keys_file_path = '???'
 
 def get_real_time_data():
     c_time = int(time.time())
@@ -34,7 +28,6 @@ def get_real_time_data():
     url = 'http://www.smzdm.com/json_more?timesort=' + str(c_time)
     r = requests.get(url=url, headers=headers)
 
-    # data = r.text.encode('utf-8').decode('unicode_escape')
     data = r.text
 
     dataa = json.loads(data)
@@ -60,84 +53,34 @@ def get_real_time_data():
 
     return resultList
 
+
 def read_local_file_keys():
-    with open(keys_file_path,'rt',encoding='utf-8') as f:
+    with open(keys_file_path, 'rt', encoding='utf-8') as f:
         file_data = f.read()
         return file_data.split(sep=',')
 
-def send_mail(data,key,title):
-    smtp_server = smtp_server_ip
-    username = mail_username
-    password = mail_password
-    to_addr = target_mail_address
-    msg = MIMEText(data, 'plain', 'utf-8')
-    msg['From'] = 'SMZDM爬虫'
-    msg['To'] = 'Target'
-    msg['Subject'] = Header('SMZDM关注关键字;key: '+ key + ',title:' + title + '出现提示', 'utf-8').encode()
-    server = smtplib.SMTP(smtp_server, 587)
-    server.set_debuglevel(1)
-    server.starttls()
-    server.login(username, password)
-    server.sendmail(username, [to_addr], msg.as_string())
-    server.quit()
 
-def md5(str):
-    print(str)
-    m = hashlib.md5()
-    m.update(str.encode(encoding='utf-8'))
-    return m.hexdigest()
+def send_mail(data, key, title):
+    subject = 'SMZDM关注关键字;key: %s, title: %s' % (
+        key, title)
+    url = "%s?text=%s&desp=%s" % (
+        base_url, subject, data)
+    requests.get(url=url)
 
 
-def is_data_existed(result):
-    db = pymysql.connect(database_ip_and_port, database_username, database_password, database_name)
-    cursor = db.cursor()
-    tempResult = sorted(result.items(), key=lambda result: result[0])
-    sql = "SELECT * FROM smzdm_record where md5 = '%s'" % \
-          md5(str(tempResult))
+def find_keys(result):
+    for key in keys:
+        if result['title'].find(key) != -1:
+            if result['page_url'] not in sended_list:
+                print (result)
+                send_mail(str(result), key, result['title'])
+                sended_list.add(result['page_url'])
 
-    print(md5(str(tempResult)))
-    try:
-        cursor.execute(sql)
-        print(cursor.rowcount)
-        if cursor.rowcount > 0 :
-            return False
-        else:
-            return True
-    except:
-        db.rollback()
-
-    db.close()
-
-def insert_data(result):
-    db = pymysql.connect(database_ip_and_port, database_username, database_password, database_name)
-    db.set_charset('utf8')
-    cursor = db.cursor()
-    tempResult = sorted(result.items(), key=lambda result: result[0])
-    sql = "INSERT INTO smzdm_record(title,price,link,page_url,md5) VALUES ('%s','%s','%s','%s','%s')" % \
-          (result['title'],result['price'],result['link'],result['page_url'],md5(str(tempResult)))
-
-    try:
-        cursor.execute(sql)
-        db.commit()
-        if cursor.rowcount > 0:
-            return True
-        else:
-            return False
-    except Exception as e:
-        print(e)
-        db.rollback()
-
-    db.close()
 
 if __name__ == '__main__':
-
-        keys = read_local_file_keys()
-        resultList = get_real_time_data()
-        print(resultList)
-        for result in resultList:
-            for key in keys:
-                if result['title'].find(key) != -1:
-                    if is_data_existed(result):
-                        send_mail(str(result), key, result['title'])
-                        insert_data(result)
-
+    keys = read_local_file_keys()
+    resultList = get_real_time_data()
+    for result in resultList:
+        find_keys(result)
+    with(open(cache_file, 'wb')) as _fd:
+        dump(sended_list, _fd)
